@@ -41,7 +41,6 @@
 #include "output.h"
 #include "pair.h"
 #include "special.h"
-#include "style_command.h"      // IWYU pragma: keep
 #include "thermo.h"
 #include "timer.h"
 #include "universe.h"
@@ -52,6 +51,7 @@
 #include <cerrno>
 #include <cctype>
 #include <filesystem>
+#include <memory>
 
 using namespace LAMMPS_NS;
 
@@ -62,12 +62,16 @@ static constexpr int DELTA = 4;
 static constexpr int LMP_MAXFILE = 16;
 
 /* ----------------------------------------------------------------------
-   one instance per command in style_command.h
+   process-global registry of command style factory functions.  Shared by all
+   LAMMPS instances and persistent across the "clear" command.  Built-in styles
+   are registered once by the generated register_command_styles(); plugins
+   add/override entries at runtime.
 ------------------------------------------------------------------------- */
 
-template <typename T> static Command *command_creator(LAMMPS *lmp)
+CreatorRegistry<Input::CommandCreator> &Input::command_styles()
 {
-  return new T(lmp);
+  static CreatorRegistry<Input::CommandCreator> registry;
+  return registry;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -104,8 +108,8 @@ function executed, and finally the class instance is deleted.
  * \param  argv  argument vector  */
 
 Input::Input(LAMMPS *lmp, int argc, char **argv) :
-    Pointers(lmp), variable(nullptr), labelstr(nullptr), infiles(nullptr), inlines(nullptr),
-    command_map(nullptr)
+    Pointers(lmp), command(nullptr), variable(nullptr), labelstr(nullptr), infiles(nullptr),
+    inlines(nullptr)
 {
   MPI_Comm_rank(world, &me);
 
@@ -128,18 +132,11 @@ Input::Input(LAMMPS *lmp, int argc, char **argv) :
     inlines = new int[LMP_MAXFILE];
   }
 
-  variable = new Variable(lmp);
+  if (lmp->kokkos && lmp->kokkos->kokkos_exists)
+    variable = new VariableKokkos(lmp);
+  else
+    variable = new Variable(lmp);
 
-  // fill map with commands listed in style_command.h
-
-  command_map = new CommandCreatorMap();
-
-#define COMMAND_CLASS
-#define CommandStyle(key,Class) \
-  (*command_map)[#key] = &command_creator<Class>;
-#include "style_command.h"      // IWYU pragma: keep
-#undef CommandStyle
-#undef COMMAND_CLASS
 
   // process command-line args
   // check for args "-var" and "-echo"
@@ -179,8 +176,6 @@ Input::~Input()
   delete[] infiles;
   delete[] inlines;
   delete variable;
-
-  delete command_map;
 }
 
 /** Process all input from the ``FILE *`` pointer *infile*
@@ -461,8 +456,8 @@ void Input::parse()
         error->all(FLERR,"Unmatched single quote in command: {}",line);
       ptr = ptrmatch + 1;
     } else if (*ptr == '"') {
-      if (strstr(ptr,"\"\"\"") == ptr) {
-        ptrmatch = strstr(ptr+3,"\"\"\"");
+      if (strstr(ptr,R"(""")") == ptr) {
+        ptrmatch = strstr(ptr+3,R"(""")");
         if (ptrmatch == nullptr)
           error->all(FLERR,"Unmatched triple quote in command: {}",line);
         ptr = ptrmatch + 3;
@@ -542,8 +537,8 @@ char *Input::nextword(char *str, char **next)
   //   stop = first whitespace char after start
   //   next = char after stop, or stop itself if stop is null char
 
-  if (strstr(start,"\"\"\"") == start) {
-    stop = strstr(&start[3],"\"\"\"");
+  if (strstr(start,R"(""")") == start) {
+    stop = strstr(&start[3],R"(""")");
     if (!stop) error->all(FLERR,"Unbalanced quotes in input line");
     start += 3;
     *next = stop+3;
@@ -586,8 +581,9 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
   // beyond = points to text following variable
 
   int i,n,paren_count,nchars;
-  char immediate[256];
-  char *var,*value,*beyond;
+  std::string immediate;
+  char *var,*beyond;
+  const char *value;
   char *ptrmatch;
 
   char *ptr = str;
@@ -599,9 +595,16 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
 
   while (*ptr) {
 
+    // if this is not the first character and the character before ptr is a backslash
+    // do *not* expand as variable but overwrite the backslash with the $
+
+    if ((*ptr == '$') && (ptr > str) && (ptr[- 1] == '\\')) {
+
+      ptr2[-1] = *ptr++;
+
     // variable substitution
 
-    if (*ptr == '$') {
+    } else if (*ptr == '$') {
 
       // value = ptr to expanded variable
       // variable name between curly braces, e.g. ${a}
@@ -633,7 +636,7 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
           i++;
         }
 
-        if (var[i] == '\0') error->one(FLERR,"Invalid immediate variable");
+        if (var[i] == '\0') error->one(FLERR,"Invalid immediate variable {}", ptr);
         var[i] = '\0';
         beyond = ptr + strlen(var) + 3;
 
@@ -646,13 +649,14 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
           *fmtflag='\0';
         }
 
-        // quick check for proper format string
+        // check that the format string matches the floating point value
 
-        if (!utils::strmatch(fmtstr,"%[0-9 ]*\\.[0-9]+[efgEFG]"))
-          error->all(FLERR,"Incorrect conversion in format string");
+        auto errmsg = utils::check_format(fmtstr, utils::FmtArg::FLOAT);
+        if (!errmsg.empty())
+          error->all(FLERR,"Invalid format string in immediate variable: {}", errmsg);
 
-        snprintf(immediate,256,fmtstr,variable->compute_equal(var));
-        value = immediate;
+        immediate = utils::sprintf(fmtstr, variable->compute_equal(var));
+        value = immediate.c_str();
 
       // single character variable name, e.g. $a
 
@@ -694,8 +698,8 @@ void Input::substitute(char *&str, char *&str2, int &max, int &max2, int flag)
       ptr += nchars;
       ptr2 += nchars;
     } else if (*ptr == '"') {
-      if (strstr(ptr,"\"\"\"") == ptr) {
-        ptrmatch = strstr(ptr+3,"\"\"\"");
+      if (strstr(ptr,R"(""")") == ptr) {
+        ptrmatch = strstr(ptr+3,R"(""")");
         if (ptrmatch == nullptr)
           error->all(FLERR,"Unmatched triple quote in command");
         nchars = ptrmatch+3 - ptr;
@@ -736,7 +740,7 @@ int Input::numtriple(char *line)
 {
   int count = 0;
   char *ptr = line;
-  while ((ptr = strstr(ptr,"\"\"\""))) {
+  while ((ptr = strstr(ptr,R"(""")"))) {
     ptr += 3;
     count++;
   }
@@ -856,19 +860,20 @@ int Input::execute_command()
 
   if (lmp->suffix_enable && lmp->non_pair_suffix()) {
     mycmd = command + std::string("/") + lmp->non_pair_suffix();
-    if (command_map->find(mycmd) == command_map->end()) {
+    if (!command_styles().contains(mycmd)) {
       if (lmp->suffix2) {
         mycmd = command + std::string("/") + lmp->suffix2;
-        if (command_map->find(mycmd) == command_map->end())
+        if (!command_styles().contains(mycmd))
           mycmd = command;
       } else mycmd = command;
     }
   }
-  if (command_map->find(mycmd) != command_map->end()) {
-    CommandCreator &command_creator = (*command_map)[mycmd];
-    Command *cmd = command_creator(lmp);
+  if (CommandCreator command_creator = command_styles().find(mycmd)) {
+    // use a unique_ptr so the command object is destroyed even if its
+    // command() method throws (e.g. an input error caught by a unit test),
+    // which otherwise leaks the partially-run command
+    std::unique_ptr<Command> cmd(command_creator(lmp));
     cmd->command(narg,arg);
-    delete cmd;
     return 0;
   }
 
@@ -891,7 +896,10 @@ void Input::clear()
   lmp->destroy();
   lmp->create();
   lmp->post_create();
+
+  // reset to clean status for classes that are not re-created
   variable->clear_in_progress();
+  error->reset_warn();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -938,7 +946,7 @@ void Input::ifthenelse()
   // bound "then" commands
 
   if (strcmp(arg[1],"then") != 0)
-    error->all(FLERR, 1, "Illegal if command: expected \"then\" but found \"{}\"", arg[1]);
+    error->all(FLERR, 1, R"(Illegal if command: expected "then" but found "{}")", arg[1]);
 
   int first = 2;
   int iarg = first;
@@ -1787,7 +1795,7 @@ void Input::pair_coeff()
   // if arg[1] < arg[0], and neither contain a wildcard, reorder
 
   int itype,jtype;
-  if (utils::strmatch(arg[0],"^\\d+$") && utils::strmatch(arg[1],"^\\d+$")) {
+  if (utils::strmatch(arg[0], R"(^\d+$)") && utils::strmatch(arg[1],R"(^\d+$)")) {
     itype = utils::inumeric(FLERR,arg[0],false,lmp);
     jtype = utils::inumeric(FLERR,arg[1],false,lmp);
     if (jtype < itype) {
@@ -2015,6 +2023,8 @@ void Input::uncompute()
 {
   if (narg != 1)
     error->all(FLERR, Error::COMMAND, "Uncompute command expects exactly one argument");
+  if (!modify->get_compute_by_id(arg[0]))
+    error->all(FLERR, Error::ARGZERO, "Could not find compute ID {} to delete", arg[0]);
   modify->delete_compute(arg[0]);
 }
 
@@ -2031,6 +2041,8 @@ void Input::undump()
 void Input::unfix()
 {
   if (narg != 1) error->all(FLERR, Error::COMMAND, "Unfix command expects exactly one argument");
+  if (!modify->get_fix_by_id(arg[0]))
+    error->all(FLERR, Error::ARGZERO, "Could not find fix ID {} to delete", arg[0]);
   modify->delete_fix(arg[0]);
 }
 
@@ -2054,11 +2066,10 @@ void Input::units()
 int Input::meta(const std::string &prefix)
 {
   auto mycmd = fmt::format("{}_{}", utils::uppercase(prefix), utils::uppercase(arg[0]));
-  if (command_map->find(mycmd) != command_map->end()) {
-    CommandCreator &command_creator = (*command_map)[mycmd];
-    Command *cmd = command_creator(lmp);
+  if (CommandCreator command_creator = command_styles().find(mycmd)) {
+    // command() raises errors, which would step over a delete of a raw pointer
+    std::unique_ptr<Command> cmd(command_creator(lmp));
     cmd->command(narg-1,arg+1);
-    delete cmd;
     return 1;
   } else return 0;
 }

@@ -249,7 +249,7 @@ int MPI_Send(const void *buf, int count, MPI_Datatype datatype, int dest, int ta
 
 /* ---------------------------------------------------------------------- */
 
-int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm,
+int MPI_Isend(const void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm,
               MPI_Request *request)
 {
   static int callcount = 0;
@@ -557,9 +557,17 @@ int MPI_Bcast(void *buf, int count, MPI_Datatype datatype, int root, MPI_Comm co
 
 /* ---------------------------------------------------------------------- */
 
+int MPI_Ibcast(void *buf, int count, MPI_Datatype datatype, int root, MPI_Comm comm,
+               MPI_Request *req)
+{
+  return 0;
+}
+
+/* ---------------------------------------------------------------------- */
+
 /* copy values from data1 to data2 */
 
-int MPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op,
+int MPI_Allreduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op,
                   MPI_Comm comm)
 {
   int n = count * stubtypesize(datatype);
@@ -573,7 +581,7 @@ int MPI_Allreduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype
 
 /* copy values from data1 to data2 */
 
-int MPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root,
+int MPI_Reduce(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op, int root,
                MPI_Comm comm)
 {
   int n = count * stubtypesize(datatype);
@@ -585,7 +593,7 @@ int MPI_Reduce(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, M
 
 /* ---------------------------------------------------------------------- */
 
-int MPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op,
+int MPI_Scan(const void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI_Op op,
              MPI_Comm comm)
 {
   int n = count * stubtypesize(datatype);
@@ -599,7 +607,7 @@ int MPI_Scan(void *sendbuf, void *recvbuf, int count, MPI_Datatype datatype, MPI
 
 /* copy values from data1 to data2 */
 
-int MPI_Allgather(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
+int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
                   MPI_Datatype recvtype, MPI_Comm comm)
 {
   int n = sendcount * stubtypesize(sendtype);
@@ -613,7 +621,7 @@ int MPI_Allgather(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *rec
 
 /* copy values from data1 to data2 */
 
-int MPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf,
+int MPI_Allgatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf,
                    int *recvcounts, int *displs, MPI_Datatype recvtype, MPI_Comm comm)
 {
   int n = sendcount * stubtypesize(sendtype);
@@ -627,7 +635,7 @@ int MPI_Allgatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *re
 
 /* copy values from data1 to data2 */
 
-int MPI_Reduce_scatter(void *sendbuf, void *recvbuf, int *recvcounts, MPI_Datatype datatype,
+int MPI_Reduce_scatter(const void *sendbuf, void *recvbuf, int *recvcounts, MPI_Datatype datatype,
                        MPI_Op op, MPI_Comm comm)
 {
   int n = *recvcounts * stubtypesize(datatype);
@@ -641,7 +649,7 @@ int MPI_Reduce_scatter(void *sendbuf, void *recvbuf, int *recvcounts, MPI_Dataty
 
 /* copy values from data1 to data2 */
 
-int MPI_Gather(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
+int MPI_Gather(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
                MPI_Datatype recvtype, int root, MPI_Comm comm)
 {
   int n = sendcount * stubtypesize(sendtype);
@@ -655,7 +663,7 @@ int MPI_Gather(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbu
 
 /* copy values from data1 to data2 */
 
-int MPI_Gatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int *recvcounts,
+int MPI_Gatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int *recvcounts,
                 int *displs, MPI_Datatype recvtype, int root, MPI_Comm comm)
 {
   int n = sendcount * stubtypesize(sendtype);
@@ -667,9 +675,19 @@ int MPI_Gatherv(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvb
 
 /* ---------------------------------------------------------------------- */
 
+int MPI_Igatherv(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf,
+                 int *recvcounts, int *displs, MPI_Datatype recvtype, int root, MPI_Comm comm,
+                 MPI_Request *req)
+{
+  return MPI_Gatherv(sendbuf, sendcount, sendtype, recvbuf, recvcounts, displs, recvtype, root,
+                     comm);
+}
+
+/* ---------------------------------------------------------------------- */
+
 /* copy values from data1 to data2 */
 
-int MPI_Scatter(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
+int MPI_Scatter(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
                 MPI_Datatype recvtype, int root, MPI_Comm comm)
 {
   int n = recvcount * stubtypesize(recvtype);
@@ -683,7 +701,7 @@ int MPI_Scatter(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvb
 
 /* copy values from data1 to data2 */
 
-int MPI_Scatterv(void *sendbuf, int *sendcounts, int *displs, MPI_Datatype sendtype, void *recvbuf,
+int MPI_Scatterv(const void *sendbuf, int *sendcounts, int *displs, MPI_Datatype sendtype, void *recvbuf,
                  int recvcount, MPI_Datatype recvtype, int root, MPI_Comm comm)
 {
   int n = recvcount * stubtypesize(recvtype);
@@ -695,9 +713,18 @@ int MPI_Scatterv(void *sendbuf, int *sendcounts, int *displs, MPI_Datatype sendt
 
 /* ---------------------------------------------------------------------- */
 
+int MPI_Iscatterv(const void *sendbuf, int *sendcounts, int *displs, MPI_Datatype sendtype, void *recvbuf,
+                  int recvcounts, MPI_Datatype recvtype, int root, MPI_Comm comm, MPI_Request *req)
+{
+  return MPI_Scatterv(sendbuf, sendcounts, displs, sendtype, recvbuf, recvcounts, recvtype, root,
+                      comm);
+}
+
+/* ---------------------------------------------------------------------- */
+
 /* copy values from data1 to data2 */
 
-int MPI_Alltoall(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
+int MPI_Alltoall(const void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recvbuf, int recvcount,
                  MPI_Datatype recvtype, MPI_Comm comm)
 {
   int n = sendcount * stubtypesize(sendtype);
@@ -711,7 +738,7 @@ int MPI_Alltoall(void *sendbuf, int sendcount, MPI_Datatype sendtype, void *recv
 
 /* copy values from data1 to data2 */
 
-int MPI_Alltoallv(void *sendbuf, int *sendcounts, int *sdispls, MPI_Datatype sendtype,
+int MPI_Alltoallv(const void *sendbuf, int *sendcounts, int *sdispls, MPI_Datatype sendtype,
                   void *recvbuf, int *recvcounts, int *rdispls, MPI_Datatype recvtype,
                   MPI_Comm comm)
 {

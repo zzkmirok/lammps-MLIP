@@ -27,6 +27,7 @@
 #include "kspace.h"
 #include "modify.h"
 #include "neighbor.h"
+#include "timer.h"
 #include "update.h"
 
 #include <cstring>
@@ -117,6 +118,8 @@ static void open_socket(int &sockfd, int inet, int port, char *host, Error *erro
     // fills up details of the socket address
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sun_family = AF_UNIX;
+    if (strlen(host) + 10 > sizeof(serv_addr.sun_path))
+      error->one(FLERR, "Fix ipi host name is too long for a UNIX socket name");
     strcpy(serv_addr.sun_path, "/tmp/ipi_");
     strcpy(serv_addr.sun_path + 9, host);
 
@@ -163,10 +166,10 @@ static void readbuffer(int sockfd, char *data, int len, Error *error)
 
   while (nr > 0 && n < len) {
     nr = read(sockfd, &data[n], len - n);
-    n += nr;
+    if (nr > 0) n += nr;
   }
 
-  if (n == 0) error->one(FLERR, "Error reading from socket: broken connection");
+  if ((nr < 0) || (n <= 0)) error->one(FLERR, "Error reading from socket: broken connection");
 }
 
 /* ---------------------------------------------------------------------- */
@@ -208,6 +211,7 @@ FixIPI::FixIPI(LAMMPS *lmp, int narg, char **arg) : Fix(lmp, narg, arg), irregul
     error->all(FLERR, "Invalid port for fix ipi: {}", port);
 
   hasdata = bsize = 0;
+  exit_flag = 0;
 
   // creates a temperature compute for all atoms
   modify->add_compute("IPI_TEMP all temp");
@@ -302,15 +306,16 @@ void FixIPI::initial_integrate(int /*vflag*/)
       else break;
     }
 
-    if (strcmp(header,"EXIT        ") == 0)
-      error->one(FLERR, "Got EXIT message from i-PI. Now leaving!");
-
-    // when i-PI signals it has positions to evaluate new forces,
-    // read positions and cell data
-    if (strcmp(header,"POSDATA     ") == 0)  {
+    // on EXIT set nat to -1 so all ranks can break out of
+    // the run loop cleanly (via timer->force_timeout)
+    if (strcmp(header,"EXIT        ") == 0) {
+      nat = -1;
+    } else if (strcmp(header,"POSDATA     ") == 0)  {
       readbuffer(ipisock, (char*) cellh, 9*8, error);
       readbuffer(ipisock, (char*) cellih, 9*8, error);
       readbuffer(ipisock, (char*) &nat, 4, error);
+      if ((nat <= 0) || ((bigint) nat > 10*atom->natoms))
+        error->one(FLERR, "Fix ipi received an invalid number of atoms from the server");
 
       // allocate buffer, but only do this once.
       if (bsize==0) {
@@ -327,6 +332,16 @@ void FixIPI::initial_integrate(int /*vflag*/)
 
   // shares the atomic coordinates with everyone
   MPI_Bcast(&nat,1,MPI_INT,0,world);
+
+  // trigger a clean run termination so the main loop breaks out and
+  // Finish::end() can be triggered. exit_flag is set so final_integrate
+  // no-ops.
+  if (nat == -1) {
+    timer->force_timeout();
+    exit_flag = 1;
+    return;
+  }
+
   // must also allocate the buffer on the non-head nodes
   if (bsize==0) {
     bsize=3*nat;
@@ -373,7 +388,7 @@ void FixIPI::initial_integrate(int /*vflag*/)
 
   // ensure atoms are in current box & update box via shrink-wrap
   // has to be be done before invoking Irregular::migrate_atoms()
-  //   since it requires atoms be inside simulation box
+  // since it requires atoms be inside simulation box
 
   // folds atomic coordinates close to the origin
   if (domain->triclinic) domain->x2lamda(atom->nlocal);
@@ -425,7 +440,7 @@ void FixIPI::initial_integrate(int /*vflag*/)
   }
 
   // compute PE. makes sure that it will be evaluated at next step
-  modify->compute[modify->find_compute("thermo_pe")]->invoked_scalar = -1;
+  modify->get_compute_by_id("thermo_pe")->invoked_scalar = -1;
   modify->addstep_compute_all(update->ntimestep+1);
 
   hasdata=1;
@@ -439,6 +454,14 @@ void FixIPI::final_integrate()
   double vir[9], pot=0.0;
   double forceconv, potconv, posconv, pressconv, posconv3;
   char retstr[1024] = { '\0' };
+
+  // initial_integrate signalled an EXIT for this step. The intervening
+  // force compute already ran on stale positions; just skip the socket
+  // I/O so the run loop can break out at the next check_timeout.
+  if (exit_flag) {
+    hasdata = 0;
+    return;
+  }
 
   // conversions from LAMMPS units to atomic units, which are used by i-PI
   potconv=3.1668152e-06/force->boltz;
@@ -491,6 +514,7 @@ void FixIPI::final_integrate()
     retstr[0] = '\0';
   }
 
+  int exit_now = 0;
   if (master) {
     // check for new messages
     while (true) {
@@ -501,10 +525,9 @@ void FixIPI::final_integrate()
       else break;
     }
 
-    if (strcmp(header,"EXIT        ") == 0)
-      error->one(FLERR, "Got EXIT message from i-PI. Now leaving!");
-
-    if (strcmp(header,"GETFORCE    ") == 0)  {
+    if (strcmp(header,"EXIT        ") == 0) {
+      exit_now = 1;
+    } else if (strcmp(header,"GETFORCE    ") == 0)  {
       // return force and energy data
       writebuffer(ipisock,"FORCEREADY  ",MSGLEN, error);
       writebuffer(ipisock,(char*) &pot,8, error);
@@ -517,6 +540,14 @@ void FixIPI::final_integrate()
     }
     else
       error->one(FLERR, "Wrapper did not ask for forces, I will now die!");
+  }
+
+  // propagate the EXIT decision so all ranks force_timeout together;
+  // the next Verlet iteration's check_timeout will then end the run cleanly
+  MPI_Bcast(&exit_now, 1, MPI_INT, 0, world);
+  if (exit_now) {
+    timer->force_timeout();
+    exit_flag = 1;
   }
 
   hasdata=0;

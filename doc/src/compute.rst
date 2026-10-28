@@ -235,6 +235,7 @@ The individual style names on the :doc:`Commands compute <Commands_compute>` pag
 * :doc:`fabric <compute_fabric>` - calculates fabric tensors from pair interactions
 * :doc:`fep <compute_fep>` - compute free energies for alchemical transformation from perturbation theory
 * :doc:`fep/ta <compute_fep_ta>` - compute free energies for a test area perturbation
+* :doc:`frenkel <compute_frenkel>` - identify point defects by Wigner-Seitz analysis
 * :doc:`force/tally <compute_tally>` - force between two groups of atoms via the tally callback mechanism
 * :doc:`fragment/atom <compute_cluster_atom>` - fragment ID for each atom
 * :doc:`gaussian/grid/local <compute_gaussian_grid_local>` - local array of Gaussian atomic contributions on a regular grid
@@ -244,6 +245,7 @@ The individual style names on the :doc:`Commands compute <Commands_compute>` pag
 * :doc:`gyration/chunk <compute_gyration_chunk>` - radius of gyration for each chunk
 * :doc:`gyration/shape <compute_gyration_shape>` - shape parameters from gyration tensor
 * :doc:`gyration/shape/chunk <compute_gyration_shape_chunk>` - shape parameters from gyration tensor for each chunk
+* :doc:`hbond/local <compute_hbond_local>` - identify hydrogen bonds
 * :doc:`heat/flux <compute_heat_flux>` - heat flux through a group of atoms
 * :doc:`heat/flux/tally <compute_tally>` - heat flux through a group of atoms via the tally callback mechanism
 * :doc:`heat/flux/virial/tally <compute_tally>` - virial heat flux between two groups via the tally callback mechanism
@@ -251,6 +253,7 @@ The individual style names on the :doc:`Commands compute <Commands_compute>` pag
 * :doc:`hma <compute_hma>` - harmonically mapped averaging for atomic crystals
 * :doc:`improper <compute_improper>` - energy of each improper sub-style
 * :doc:`improper/local <compute_improper_local>` - angle of each improper
+* :doc:`inertia <compute_inertia>` - inertia tensor of group of atoms
 * :doc:`inertia/chunk <compute_inertia_chunk>` - inertia tensor for each chunk
 * :doc:`ke <compute_ke>` - translational kinetic energy
 * :doc:`ke/atom <compute_ke_atom>` - kinetic energy for each atom

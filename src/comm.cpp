@@ -36,6 +36,8 @@
 #include "update.h"
 
 #include <cstring>
+#include <limits>
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -44,6 +46,10 @@ using namespace LAMMPS_NS;
 
 enum{ONELEVEL,TWOLEVEL,NUMA,CUSTOM};
 enum{CART,CARTREORDER,XYZ};
+
+namespace {
+  constexpr double EPSILON = std::numeric_limits<double>::epsilon();
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -212,24 +218,31 @@ void Comm::init()
   if (force->bond) maxforward = MAX(maxforward,force->bond->comm_forward);
   if (force->bond) maxreverse = MAX(maxreverse,force->bond->comm_reverse);
 
+  // fixes, computes, and dumps request a reverse communication of their own
+  // data and do so regardless of the newton setting, so their requirements
+  // are collected separately and are not discarded with newton off below
+
+  int maxreverse_extra = 0;
+
   for (const auto &fix : fix_list) {
     maxforward = MAX(maxforward, fix->comm_forward);
-    maxreverse = MAX(maxreverse, fix->comm_reverse);
+    maxreverse_extra = MAX(maxreverse_extra, fix->comm_reverse);
   }
 
   for (const auto &compute : modify->get_compute_list()) {
     maxforward = MAX(maxforward, compute->comm_forward);
-    maxreverse = MAX(maxreverse, compute->comm_reverse);
+    maxreverse_extra = MAX(maxreverse_extra, compute->comm_reverse);
   }
 
   for (const auto &dump: output->get_dump_list()) {
     maxforward = MAX(maxforward, dump->comm_forward);
-    maxreverse = MAX(maxreverse, dump->comm_reverse);
+    maxreverse_extra = MAX(maxreverse_extra, dump->comm_reverse);
   }
 
   if (force->newton == 0) maxreverse = 0;
   if (force->pair) maxreverse = MAX(maxreverse,force->pair->comm_reverse_off);
   if (force->bond) maxreverse = MAX(maxreverse,force->bond->comm_reverse_off);
+  maxreverse = MAX(maxreverse,maxreverse_extra);
 
   // maxexchange_atom = size of an exchanged atom, set by AtomVec
   //   only needs to be set if size > BUFEXTRA
@@ -684,7 +697,7 @@ double Comm::get_comm_cutoff()
   if (!force->pair && (cutghostuser == 0.0)) {
     maxcommcutoff = MAX(maxcommcutoff,maxbondcutoff);
   } else {
-    if ((me == 0) && (maxbondcutoff > maxcommcutoff))
+    if ((me == 0) && ((maxbondcutoff - EPSILON) > maxcommcutoff))
       error->warning(FLERR,"Communication cutoff {} is shorter than a bond "
                      "length based estimate of {}. This may lead to errors.",
                      maxcommcutoff,maxbondcutoff);
@@ -693,7 +706,7 @@ double Comm::get_comm_cutoff()
   // print warning if neighborlist cutoff overrides user cutoff
 
   if ((me == 0) && (update->setupflag == 1)) {
-    if ((cutghostuser > 0.0) && (maxcommcutoff > cutghostuser))
+    if ((cutghostuser > 0.0) && ((maxcommcutoff - EPSILON) > cutghostuser))
       error->warning(FLERR,"Communication cutoff adjusted to {}",maxcommcutoff);
   }
 
